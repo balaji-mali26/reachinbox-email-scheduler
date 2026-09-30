@@ -1,0 +1,45 @@
+FROM node:20-alpine AS builder
+
+# Install OpenSSL and libc compatibility libraries for Prisma engine detection and generation
+RUN apk add --no-cache openssl libc6-compat
+
+WORKDIR /app/backend
+
+# Copy backend package manifests and Prisma schema from repository root context
+COPY backend/package*.json ./
+COPY backend/prisma ./prisma/
+
+RUN npm ci
+
+# Copy backend source code directly to /app/backend
+COPY backend/src ./src
+COPY backend/tsconfig.json ./
+
+RUN npx prisma generate
+RUN npm run build
+
+# Runner stage
+FROM node:20-alpine AS runner
+
+# Install OpenSSL and libc compatibility runtime dependencies for Prisma query engine
+RUN apk add --no-cache openssl libc6-compat
+
+WORKDIR /app/backend
+ENV NODE_ENV=production
+
+# Install production dependencies
+COPY backend/package*.json ./
+COPY backend/prisma ./prisma/
+RUN npm ci --omit=dev && npm cache clean --force
+
+# Copy compiled application code and Prisma artifacts
+COPY --from=builder /app/backend/dist ./dist
+COPY --from=builder /app/backend/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/backend/node_modules/@prisma/client ./node_modules/@prisma/client
+
+# Symlink /app/backend/backend to /app/backend so that any runtime command
+# executed with '--prefix backend' or looking for /app/backend/backend/package.json
+# safely resolves to /app/backend/package.json without ENOENT
+RUN ln -s /app/backend /app/backend/backend
+
+CMD ["node", "dist/workers/emailWorker.js"]

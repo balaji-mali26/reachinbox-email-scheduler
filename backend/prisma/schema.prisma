@@ -1,0 +1,124 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum JobStatus {
+  SCHEDULED
+  PROCESSING
+  SENT
+  FAILED
+  RATE_LIMITED_RESCHEDULED
+}
+
+model User {
+  id              String           @id @default(uuid())
+  email           String           @unique
+  name            String?
+  avatarUrl       String?
+  googleId        String           @unique
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  senders         Sender[]
+  emailBatches    EmailBatch[]
+  slackConnection SlackConnection?
+
+  @@index([email])
+}
+
+model Sender {
+  id           String       @id @default(uuid())
+  userId       String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email        String
+  name         String
+  hourlyLimit  Int          @default(100)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  emailBatches EmailBatch[]
+  emailJobs    EmailJob[]
+
+  @@unique([userId, email])
+  @@index([userId])
+}
+
+model EmailBatch {
+  id              String     @id @default(uuid())
+  userId          String
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  senderId        String
+  sender          Sender     @relation(fields: [senderId], references: [id])
+  subject         String
+  body            String
+  startAt         DateTime
+  minDelayMs      Int        @default(2000)
+  hourlyLimit     Int        @default(100)
+  totalRecipients Int
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  jobs            EmailJob[]
+
+  @@index([userId])
+}
+
+model EmailJob {
+  id                   String     @id @default(uuid())
+  batchId              String
+  batch                EmailBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  senderId             String
+  sender               Sender     @relation(fields: [senderId], references: [id])
+  recipientEmail       String
+  subject              String
+  body                 String
+  status               JobStatus  @default(SCHEDULED)
+  scheduledAt          DateTime
+  sentAt               DateTime?
+  failedAt             DateTime?
+  failureReason        String?
+  processingStartedAt  DateTime?
+  processingLeaseUntil DateTime?
+  workerAttempt        Int        @default(0)
+  etherealMessageId    String?
+  etherealPreviewUrl   String?
+  bullmqJobId          String     @unique
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+
+  @@index([scheduledAt])
+  @@index([status])
+  @@index([senderId, scheduledAt])
+  @@index([processingLeaseUntil])
+  @@index([recipientEmail])
+}
+
+model SlackConnection {
+  id             String   @id @default(uuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  teamId         String
+  teamName       String?
+  channelId      String?
+  channelName    String?
+  encryptedToken String
+  tokenIv        String
+  tokenTag       String
+  botUserId      String?
+  scope          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model RateLimitAudit {
+  id                 String    @id @default(uuid())
+  senderId           String
+  hourWindow         String    // YYYY-MM-DD-HH
+  attemptedJobsCount Int       @default(1)
+  notifiedSlackAt    DateTime?
+  createdAt          DateTime  @default(now())
+
+  @@unique([senderId, hourWindow])
+}
